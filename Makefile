@@ -18,13 +18,13 @@ CFLAGS =
 NAME = ft_printf
 
 # Source files - get all .c files recursively
-SRCS = $(wildcard *.c) $(wildcard 42_libft/*.c)
+SRCS = $(wildcard *.c) $(wildcard libft/*.c)
 
 # Object files
 OBJS = $(SRCS:.c=.o)
 
 # Include directories
-INCLUDES = -I. -I42_libft
+INCLUDES = -I. -Ilibft
 
 # Default target
 all: $(NAME)

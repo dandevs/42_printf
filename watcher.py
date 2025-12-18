@@ -8,225 +8,319 @@ Options:
     --unsafe    Disable compiler warnings (-Wall, -Wextra, -Werror)
     --fast      Enable incremental compilation optimizations:
                 - -O0: No optimization for faster compilation
-                - -mincremental-linker-compatible: Incremental linker support
                 - ccache: Compiler cache (if installed)
-                Works with both Makefile and direct compilation modes!
-
-Modes:
-    - If a Makefile is found: Uses 'make' to build (watches recursively)
-      In --fast mode, sets CC='ccache cc' and adds flags to CFLAGS
-    - Otherwise: Compiles individual .c files directly (watches current dir only)
-      In --fast mode, uses 'ccache cc' directly with optimization flags
 """
 
 import os
-import time
-import subprocess
 import sys
+import time
+import signal
+import subprocess
+import threading
 
-def get_c_files_recursive(directory):
-    """Get all .c files recursively from directory."""
-    c_files = []
-    for root, dirs, files in os.walk(directory):
-        # Skip hidden directories like .git
-        dirs[:] = [d for d in dirs if not d.startswith('.')]
-        for f in files:
-            if f.endswith('.c'):
-                c_files.append(os.path.join(root, f))
-    return c_files
 
-def get_c_files(directory):
-    """Get .c files from a single directory (non-recursive)."""
-    return [f for f in os.listdir(directory) if f.endswith('.c')]
+class FileWatcher:
+    """Watch files for changes in a background thread."""
+    
+    def __init__(self, directory, recursive=False):
+        self.directory = directory
+        self.recursive = recursive
+        self.mtimes = {}
+        self.changed = threading.Event()
+        self.stop_event = threading.Event()
+        self.thread = None
+    
+    def get_c_files(self):
+        """Get all .c files from directory."""
+        if self.recursive:
+            c_files = []
+            for root, dirs, files in os.walk(self.directory):
+                dirs[:] = [d for d in dirs if not d.startswith('.')]
+                for f in files:
+                    if f.endswith('.c'):
+                        c_files.append(os.path.join(root, f))
+            return c_files
+        else:
+            return [os.path.join(self.directory, f) 
+                    for f in os.listdir(self.directory) if f.endswith('.c')]
+    
+    def init_mtimes(self):
+        """Initialize file modification times."""
+        for filepath in self.get_c_files():
+            try:
+                self.mtimes[filepath] = os.path.getmtime(filepath)
+            except OSError:
+                pass
+    
+    def check_changes(self):
+        """Check if any files have changed."""
+        try:
+            for filepath in self.get_c_files():
+                try:
+                    mtime = os.path.getmtime(filepath)
+                    if filepath not in self.mtimes or mtime != self.mtimes[filepath]:
+                        self.mtimes[filepath] = mtime
+                        return True
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        return False
+    
+    def watch_loop(self):
+        """Background thread that watches for file changes."""
+        while not self.stop_event.is_set():
+            if self.check_changes():
+                self.changed.set()
+            time.sleep(0.3)
+    
+    def start(self):
+        """Start watching for changes."""
+        self.init_mtimes()
+        self.thread = threading.Thread(target=self.watch_loop, daemon=True)
+        self.thread.start()
+    
+    def stop(self):
+        """Stop watching."""
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=1)
+    
+    def has_changed(self):
+        """Check if files changed and clear the flag."""
+        if self.changed.is_set():
+            self.changed.clear()
+            return True
+        return False
+    
+    def wait_for_change(self, timeout=None):
+        """Wait for a file change."""
+        return self.changed.wait(timeout=timeout)
 
-def has_makefile(directory):
-    """Check if a Makefile exists in the directory."""
-    makefile_path = os.path.join(directory, "Makefile")
-    return os.path.exists(makefile_path)
 
-def make_and_run(directory, flags=None, use_ccache=False):
-    """Build using make and run the executable."""
-    if flags is None:
-        flags = []
+class ProcessRunner:
+    """Run and manage subprocesses."""
     
-    # Set up environment for make
-    env = os.environ.copy()
+    def __init__(self):
+        self.process = None
     
-    # If using ccache, set CC to use ccache
-    if use_ccache:
-        env['CC'] = 'ccache cc'
+    def run(self, cmd, cwd=None, env=None):
+        """Run a command and return the process."""
+        try:
+            self.process = subprocess.Popen(
+                cmd, cwd=cwd, env=env,
+                preexec_fn=os.setsid
+            )
+            return self.process
+        except Exception:
+            return None
     
-    # If we have flags, add them to CFLAGS
-    if flags:
-        # Get existing CFLAGS if any
-        existing_cflags = env.get('CFLAGS', '')
-        # Combine with our flags
-        flags_str = ' '.join(flags)
-        env['CFLAGS'] = f"{existing_cflags} {flags_str}".strip()
+    def run_and_wait(self, cmd, cwd=None, env=None, capture=False):
+        """Run a command and wait for completion. If capture=True, suppress output unless the command fails."""
+        try:
+            res = subprocess.run(
+                cmd, cwd=cwd, env=env, check=True,
+                capture_output=capture, text=True
+            )
+            return res
+        except subprocess.CalledProcessError as e:
+            # When output was captured, show both stdout and stderr on failure.
+            if capture:
+                if e.stdout:
+                    print(e.stdout, end='')
+                if e.stderr:
+                    print(e.stderr, end='', file=sys.stderr)
+            return None
     
-    # Clean and rebuild
-    try:
-        subprocess.run(["make", "fclean"], cwd=directory, check=False, 
-                      capture_output=True, env=env)
-        result = subprocess.run(["make"], cwd=directory, check=True,
-                              capture_output=True, env=env)
-    except subprocess.CalledProcessError:
-        return
+    def kill(self):
+        """Kill the current process and its children."""
+        if self.process and self.process.poll() is None:
+            try:
+                os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+                self.process.wait(timeout=1)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
     
-    # Clear terminal after compilation
-    os.system('clear')
-    
-    # Run using make run target
-    try:
-        subprocess.run(["make", "run"], cwd=directory, check=False, env=env)
-    except Exception:
-        pass
+    def wait_or_interrupt(self, watcher):
+        """Wait for process to finish or file change."""
+        if not self.process:
+            return False
+        
+        while self.process.poll() is None:
+            if watcher.has_changed():
+                self.kill()
+                return True
+            time.sleep(0.1)
+        return False
 
-def compile_and_run(filepath, flags=None, use_ccache=False):
-    """Compile a single file and run it."""
-    if flags is None:
-        flags = []
-    # Determine executable name (remove .c extension)
-    exe_name = os.path.splitext(filepath)[0]
-    
-    # Compile
-    compiler = ["ccache", "cc"] if use_ccache else ["cc"]
-    compile_cmd = compiler + flags + [filepath, "-o", exe_name]
-    try:
-        # We don't capture output so it flows to stdout/stderr
-        subprocess.run(compile_cmd, check=True)
-    except subprocess.CalledProcessError:
-        return
 
-    # Clear terminal
-    os.system('clear')
-
-    # Run
-    run_cmd = [f"./{exe_name}"]
-    try:
-        subprocess.run(run_cmd, check=False)
-    except Exception:
-        pass
+class CCompiler:
+    """Handle C compilation."""
     
-    # Delete executable
-    if os.path.exists(exe_name):
+    def __init__(self, flags=None, use_ccache=False):
+        self.flags = flags or []
+        self.use_ccache = use_ccache
+        self.runner = ProcessRunner()
+    
+    def get_env(self):
+        """Get environment with ccache if enabled."""
+        env = os.environ.copy()
+        if self.use_ccache:
+            env['CC'] = 'ccache cc'
+        if self.flags:
+            existing = env.get('CFLAGS', '')
+            env['CFLAGS'] = f"{existing} {' '.join(self.flags)}".strip()
+        return env
+    
+    def make_build(self, directory):
+        """Build using make, suppressing output unless there is an error."""
+        env = self.get_env()
+        # Always capture output during build to suppress on success
+        self.runner.run_and_wait(["make", "fclean"], cwd=directory, capture=True)
+        result = self.runner.run_and_wait(["make"], cwd=directory, env=env, capture=True)
+        if not result:
+            print("\n⚠️ Build failed. Showing compiler output above.")
+            return False
+        return True
+    
+    def make_run(self, directory, watcher):
+        """Run using make and watch for changes."""
+        env = self.get_env()
+        # Clear terminal before running program output
+        clear_screen()
+        self.runner.run(["make", "run"], cwd=directory, env=env)
+        return self.runner.wait_or_interrupt(watcher)
+    
+    def compile_file(self, filepath):
+        """Compile a single C file, suppressing output unless compilation fails."""
+        exe_name = os.path.splitext(filepath)[0]
+        compiler = ["ccache", "cc"] if self.use_ccache else ["cc"]
+        cmd = compiler + self.flags + [filepath, "-o", exe_name]
+        result = self.runner.run_and_wait(cmd, capture=True)
+        if not result:
+            print("\n⚠️ Compilation failed. Showing compiler output above.")
+            return None
+        return exe_name
+    
+    def run_file(self, exe_name, watcher):
+        """Run compiled executable and watch for changes."""
+        # Clear terminal before running program output
+        clear_screen()
+        self.runner.run([f"./{exe_name}"])
+        interrupted = self.runner.wait_or_interrupt(watcher)
+        
+        # Cleanup executable
         try:
             os.remove(exe_name)
         except OSError:
             pass
+        
+        return interrupted
+    
+    def kill(self):
+        """Kill running process."""
+        self.runner.kill()
+
 
 def has_ccache():
-    """Check if ccache is available on the system."""
+    """Check if ccache is available."""
     try:
         subprocess.run(["ccache", "--version"], capture_output=True, check=True)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
 
-def main():
-    directory = "."
-    unsafe = False
-    fast = False
-    
-    # Parse arguments
+
+def has_makefile(directory):
+    """Check if Makefile exists."""
+    return os.path.exists(os.path.join(directory, "Makefile"))
+
+
+def clear_screen():
+    """Clear the terminal."""
+    os.system('clear')
+
+
+def parse_args():
+    """Parse command line arguments."""
     args = sys.argv[1:]
-    if "--unsafe" in args:
-        unsafe = True
+    
+    unsafe = "--unsafe" in args
+    if unsafe:
         args.remove("--unsafe")
     
-    if "--fast" in args:
-        fast = True
-        args.remove("--fast")
-        
-    if args:
-        directory = args[0]
-
-    flags = ["-Wall", "-Wextra", "-Werror"] if not unsafe else []
-    
-    # Add incremental compilation flags for faster builds
+    fast = "--fast" in args
     if fast:
-        flags.append("-O0")  # No optimization for faster compilation
-        flags.append("-mincremental-linker-compatible")  # Incremental linker support
-        
-        # Check if ccache is available and prepend to compiler
-        use_ccache = has_ccache()
-        if use_ccache:
-            print("⚡ Fast mode enabled: -O0, ccache, incremental linker")
-        else:
-            print("⚡ Fast mode enabled: -O0, incremental linker (ccache not found)")
-    else:
-        use_ccache = False
+        args.remove("--fast")
+    
+    directory = args[0] if args else "."
+    
+    return directory, unsafe, fast
 
-    # Check if we should use Makefile mode
+
+def main():
+    directory, unsafe, fast = parse_args()
+    
+    # Setup compiler flags
+    flags = [] if unsafe else ["-Wall", "-Wextra", "-Werror"]
+    use_ccache = False
+    
+    if fast:
+        flags.append("-O0")
+        use_ccache = has_ccache()
+        cache_status = "ccache" if use_ccache else "no ccache"
+        print(f"⚡ Fast mode: -O0, {cache_status}")
+    
+    # Detect build mode
     use_makefile = has_makefile(directory)
     
     if use_makefile:
-        print("📦 Makefile detected - using make to build")
-        print("👀 Watching .c files recursively...")
-        print("-" * 40)
+        print("📦 Makefile mode (recursive watch)")
     else:
-        print("🔧 No Makefile - using direct compilation")
-        print("👀 Watching .c files in current directory...")
-        print("-" * 40)
-
-    # Map: filepath -> mtime
-    mtimes = {}
-
-    # Initialize mtimes and do initial build
-    try:
-        if use_makefile:
-            c_files = get_c_files_recursive(directory)
-            for filepath in c_files:
-                mtimes[filepath] = os.path.getmtime(filepath)
-            # Initial build
-            make_and_run(directory, flags, use_ccache)
-        else:
-            for f in get_c_files(directory):
-                filepath = os.path.join(directory, f)
-                mtimes[filepath] = os.path.getmtime(filepath)
-                compile_and_run(filepath, flags, use_ccache)
-    except OSError:
-        pass
-
+        print("🔧 Direct compilation mode")
+    
+    print("👀 Watching for changes... (Ctrl+C to stop)")
+    print("-" * 40)
+    
+    # Initialize components
+    watcher = FileWatcher(directory, recursive=use_makefile)
+    compiler = CCompiler(flags, use_ccache)
+    watcher.start()
+    
     try:
         while True:
-            time.sleep(1)
-            try:
-                if use_makefile:
-                    current_files = get_c_files_recursive(directory)
-                else:
-                    current_files = [os.path.join(directory, f) 
-                                    for f in get_c_files(directory)]
-            except OSError:
-                continue
+            clear_screen()
             
-            changed = False
-            for filepath in current_files:
-                try:
-                    current_mtime = os.path.getmtime(filepath)
-                    
-                    if filepath not in mtimes:
-                        # New file found, start tracking
-                        mtimes[filepath] = current_mtime
-                        changed = True
-                    elif current_mtime != mtimes[filepath]:
-                        mtimes[filepath] = current_mtime
-                        changed = True
-                except OSError:
-                    continue
+            if use_makefile:
+                if compiler.make_build(directory):
+                    interrupted = compiler.make_run(directory, watcher)
+                    if interrupted:
+                        print("\n🔄 File changed, recompiling...")
+                        continue
+            else:
+                c_files = watcher.get_c_files()
+                if c_files:
+                    exe = compiler.compile_file(c_files[0])
+                    if exe:
+                        interrupted = compiler.run_file(exe, watcher)
+                        if interrupted:
+                            print("\n🔄 File changed, recompiling...")
+                            continue
             
-            if changed:
-                if use_makefile:
-                    make_and_run(directory, flags, use_ccache)
-                else:
-                    # In non-makefile mode, compile the changed file
-                    for filepath in current_files:
-                        if filepath in mtimes:
-                            compile_and_run(filepath, flags, use_ccache)
-                            break
-                    
+            # Wait for next file change
+            watcher.wait_for_change()
+            watcher.has_changed()  # Clear the flag
+            
     except KeyboardInterrupt:
-        pass
+        print("\n👋 Stopping watcher...")
+        compiler.kill()
+        watcher.stop()
+
 
 if __name__ == "__main__":
     main()
