@@ -1,24 +1,19 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   hello.c                                            :+:      :+:    :+:   */
+/*   handle_tag_percent.c                               :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/12/10 20:06:36 by danimend          #+#    #+#             */
-/*   Updated: 2025/12/10 21:27:49 by danimend         ###   ########.fr       */
+/*   Created: 2025/12/18 00:00:00 by danimend          #+#    #+#             */
+/*   Updated: 2025/12/18 00:00:00 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#include "stdio.h"
-#include "ft_printf.h"
+#include <unistd.h>
 
-int	main(void)
+int	handle_tag_percent(void)
 {
-	ft_printf("hello world, i'm %d years old and I ate %d burgers\n", 5, 10);
-	ft_printf("Character test: %c %c %c\n", 'A', 'B', 'C');
-	ft_printf("String %% test: %s %s %sLOL\n", "Hello", "world", "!");
-	ft_printf("Unsigned int test: %u %u %u\n", 4294967295U, 0U, 123456789U);
-	ft_printf("Hexadecimal test: %x %X %x\n", 255, 255, 125165);
-	return (0);
+	write(1, "%", 1);
+	return (1);
 }

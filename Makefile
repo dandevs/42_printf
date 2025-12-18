@@ -12,19 +12,19 @@
 
 # Compiler and flags
 CC = cc
-CFLAGS = 
+CFLAGS = -Wall -Wextra -Werror
 
 # Project name
-NAME = ft_printf
+NAME = hello
 
-# Source files - get all .c files recursively
-SRCS = $(wildcard *.c) $(wildcard libft/*.c)
+# Source files
+SRCS = hello.c ft_printf.c $(wildcard libft/*.c) $(wildcard utilities/*.c)
 
 # Object files
 OBJS = $(SRCS:.c=.o)
 
 # Include directories
-INCLUDES = -I. -Ilibft
+INCLUDES = -I. -Ilibft -Iutilities
 
 # Default target
 all: $(NAME)
@@ -53,3 +53,4 @@ run: all
 	./$(NAME)
 
 .PHONY: all clean fclean re run
+
