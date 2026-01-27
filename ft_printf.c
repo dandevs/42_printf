@@ -28,6 +28,8 @@ static int	handle_format(char tag_type, va_list ap)
 		return (handle_tag_c(ap));
 	else if (tag_type == 's')
 		return (handle_tag_s(ap));
+	else if (tag_type == 'p')
+		return (handle_tag_p(ap));
 	else if (tag_type == 'x')
 		return (handle_tag_x(ap));
 	else if (tag_type == 'X')
