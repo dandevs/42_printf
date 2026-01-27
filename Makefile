@@ -10,47 +10,29 @@
 #                                                                              #
 # **************************************************************************** #
 
-# Compiler and flags
 CC = cc
 CFLAGS = -Wall -Wextra -Werror
 
-# Project name
-NAME = hello
-
-# Source files
-SRCS = hello.c ft_printf.c $(wildcard libft/*.c) $(wildcard utilities/*.c)
-
-# Object files
+# Project name (library)
+NAME = libftprintf.a
+SRCS = ft_printf.c $(wildcard libft/*.c) $(wildcard utilities/*.c)
 OBJS = $(SRCS:.c=.o)
-
-# Include directories
 INCLUDES = -I. -Ilibft -Iutilities
 
-# Default target
 all: $(NAME)
 
-# Link all object files
 $(NAME): $(OBJS)
-	$(CC) $(CFLAGS) $(OBJS) -o $(NAME)
+	ar rcs $(NAME) $(OBJS)
 
-# Compile source files
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
-# Clean object files
 clean:
 	rm -f $(OBJS)
 
-# Clean everything including executable
 fclean: clean
 	rm -f $(NAME)
 
-# Rebuild everything
 re: fclean all
 
-# Run the program after building
-run: all
-	./$(NAME)
-
-.PHONY: all clean fclean re run
-
+.PHONY: all clean fclean re
