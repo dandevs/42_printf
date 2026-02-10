@@ -6,7 +6,7 @@
 /*   By: danimend <danimend@student.42.fr>          +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2025/12/18 00:00:00 by danimend          #+#    #+#             */
-/*   Updated: 2025/12/18 00:00:00 by danimend         ###   ########.fr       */
+/*   Updated: 2026/02/10 14:23:40 by danimend         ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -42,7 +42,6 @@ int	ft_printf(const char *str, ...)
 	va_list	ap;
 	int		i;
 	int		count;
-	char	tag_type;
 
 	count = 0;
 	va_start(ap, str);
@@ -56,10 +55,9 @@ int	ft_printf(const char *str, ...)
 			write(1, str, i);
 			count += i;
 		}
-		if (!str[i])
+		if (!str[i] || !str[i + 1])
 			break ;
-		tag_type = str[i + 1];
-		count += handle_format(tag_type, ap);
+		count += handle_format(str[i + 1], ap);
 		str += i + 2;
 	}
 	va_end(ap);
