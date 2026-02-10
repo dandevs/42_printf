@@ -40,5 +40,5 @@ int	main(void)
 1. Iterate through the string via a simple counter `i` until we hit a `%` char or null.
 2. Print characters with `write` up until the `%` char or null
 3. We pass the character after `%` to `handle_format` which then chooses how to `write` the given variadic argument.
-4. Increment the string by `i` and reset `i` to 0.
+4. Increment the string by `i + 2` and reset `i` to 0.
 4. Repeat while string is not null
