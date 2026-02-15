@@ -13,16 +13,22 @@
 CC = cc
 CFLAGS = -Wall -Wextra -Werror
 
-# Project name (library)
 NAME = libftprintf.a
-SRCS = ft_printf.c $(wildcard libft/*.c) $(wildcard utilities/*.c)
+SRCS = ft_printf.c $(wildcard utilities/*.c)
 OBJS = $(SRCS:.c=.o)
 INCLUDES = -I. -Ilibft -Iutilities
 
-all: $(NAME)
+LIBFT_DIR = libft
+LIBFT = $(LIBFT_DIR)/libft.a
 
-$(NAME): $(OBJS)
+all: $(LIBFT) $(NAME)
+
+$(NAME): $(OBJS) $(LIBFT)
+	cp $(LIBFT) $(NAME)
 	ar rcs $(NAME) $(OBJS)
+
+$(LIBFT):
+	$(MAKE) -C $(LIBFT_DIR)
 
 %.o: %.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
@@ -32,7 +38,8 @@ clean:
 
 fclean: clean
 	rm -f $(NAME)
+	$(MAKE) -C $(LIBFT_DIR) fclean
 
 re: fclean all
 
-.PHONY: all clean fclean re
+.PHONY: all clean fclean re $(LIBFT_DIR)
